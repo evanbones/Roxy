@@ -4,6 +4,7 @@ import net.rasanovum.roxy.render.RoxyVoxyWorkDrain;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
+import java.lang.ref.WeakReference;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import java.util.HashMap;
@@ -49,15 +50,12 @@ public final class RoxyVoxyRenderPatch {
     private static volatile boolean serviceLookupFailure;
     private static volatile boolean enqueueFailure;
     private static volatile Object activeRenderGenerationService;
-    private static Object worldToken;
-    private static Object worldEngineToken;
+    private static WeakReference<Object> worldToken = new WeakReference<>(null);
+    private static WeakReference<Object> worldEngineToken = new WeakReference<>(null);
     private static boolean worldObserved;
+    private static boolean engineObserved;
 
     private RoxyVoxyRenderPatch() {
-    }
-
-    public static void reset() {
-        resetState(true);
     }
 
     public static void prepareFullInstanceReload() {
@@ -76,11 +74,12 @@ public final class RoxyVoxyRenderPatch {
         try {
             boolean changed;
             synchronized (RENDER_LOCK) {
-                if (worldObserved && worldToken == world) return;
+                if (worldObserved && worldToken.get() == world) return;
                 changed = worldObserved;
-                worldToken = world;
-                worldEngineToken = null;
+                worldToken = new WeakReference<>(world);
+                worldEngineToken = new WeakReference<>(null);
                 worldObserved = true;
+                engineObserved = false;
             }
             if (changed) resetState(true);
         } finally {
@@ -92,18 +91,8 @@ public final class RoxyVoxyRenderPatch {
         if (world == null) return;
         PUBLICATION_LOCK.lock();
         try {
-            boolean changed;
-            synchronized (RENDER_LOCK) {
-                if (worldObserved && worldToken == world) {
-                    worldEngineToken = worldEngine;
-                    return;
-                }
-                changed = worldObserved;
-                worldToken = world;
-                worldEngineToken = worldEngine;
-                worldObserved = true;
-            }
-            if (changed) resetState(true);
+            observeWorld(world);
+            observeEngine(worldEngine);
         } finally {
             PUBLICATION_LOCK.unlock();
         }
@@ -115,9 +104,10 @@ public final class RoxyVoxyRenderPatch {
             boolean observed;
             synchronized (RENDER_LOCK) {
                 observed = worldObserved;
-                worldToken = null;
-                worldEngineToken = null;
+                worldToken = new WeakReference<>(null);
+                worldEngineToken = new WeakReference<>(null);
                 worldObserved = false;
+                engineObserved = false;
             }
             if (observed) resetState(true);
         } finally {
@@ -129,9 +119,14 @@ public final class RoxyVoxyRenderPatch {
         if (worldEngine == null) return;
         PUBLICATION_LOCK.lock();
         try {
+            boolean changed;
             synchronized (RENDER_LOCK) {
-                worldEngineToken = worldEngine;
+                if (engineObserved && worldEngineToken.get() == worldEngine) return;
+                changed = engineObserved;
+                worldEngineToken = new WeakReference<>(worldEngine);
+                engineObserved = true;
             }
+            if (changed) resetState(true);
         } finally {
             PUBLICATION_LOCK.unlock();
         }
@@ -484,6 +479,25 @@ public final class RoxyVoxyRenderPatch {
             }
         } finally {
             PUBLICATION_LOCK.unlock();
+        }
+    }
+
+    public static Consumer<?> wrapResultConsumer(Consumer<?> consumer) {
+        if (consumer == null || consumer instanceof GuardedResultConsumer) return consumer;
+        return new GuardedResultConsumer(consumer);
+    }
+
+    private static final class GuardedResultConsumer implements Consumer<Object> {
+        private final Consumer<Object> delegate;
+
+        @SuppressWarnings("unchecked")
+        private GuardedResultConsumer(Consumer<?> delegate) {
+            this.delegate = (Consumer<Object>) delegate;
+        }
+
+        @Override
+        public void accept(Object result) {
+            acceptIfCurrent(delegate, result);
         }
     }
 

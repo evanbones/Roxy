@@ -22,6 +22,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
+import java.util.zip.ZipInputStream;
 import java.util.zip.ZipFile;
 import net.neoforged.fml.loading.moddiscovery.readers.JarModsDotTomlModFileReader;
 import net.neoforged.neoforgespi.locating.IDependencyLocator;
@@ -34,12 +35,26 @@ public final class RoxyDependencyLocator implements IDependencyLocator {
     private static final String FABRIC_STUBS = "META-INF/jars/roxy-fabric-stubs.jar";
     private static final String FABRIC_COMMAND_STUBS = "META-INF/jars/roxy-fabric-command-stubs.jar";
     private static final String CANDIDATE_LOCATOR_SERVICE = "META-INF/services/net.neoforged.neoforgespi.locating.IModFileCandidateLocator";
+    private static final String MACOS_NATIVE_PATH_PROPERTY = "roxy.macos.nativePath";
+    private static final List<String> MACOS_ARM64_NATIVE_JARS = List.of(
+            "roxy-lwjgl-lmdb-natives-macos-arm64.jar",
+            "roxy-lwjgl-zstd-natives-macos-arm64.jar",
+            "roxy-rocksdbjni-10.2.1-natives-macos-arm64.jar");
+    private static final List<String> MACOS_ARM64_NATIVE_ENTRIES = List.of(
+            "macos/arm64/org/lwjgl/lmdb/liblwjgl_lmdb.dylib",
+            "macos/arm64/org/lwjgl/zstd/liblwjgl_zstd.dylib",
+            "librocksdbjni-osx-arm64.jnilib");
+    private static final List<String> MACOS_ARM64_NATIVE_FILE_HINTS = List.of(
+            "lwjgl-lmdb-3.3.3-natives-macos-arm64.jar",
+            "lwjgl-zstd-3.3.3-natives-macos-arm64.jar",
+            "rocksdbjni-10.2.1.jar");
 
     @Override
     public void scanMods(List<IModFile> loadedMods, IDiscoveryPipeline pipeline) {
+        boolean voxyLoaded = containsVoxy(loadedMods);
         boolean forgifiedFabricLoader = containsForgifiedFabricLoader(loadedMods);
         boolean fabricCommandApi = containsFabricCommandApi(loadedMods);
-        addOwnStubs(!forgifiedFabricLoader, !fabricCommandApi, pipeline);
+        if (voxyLoaded) addOwnStubs(!forgifiedFabricLoader, !fabricCommandApi, pipeline);
         boolean c2meOpenCl = containsC2meOpenCl(loadedMods);
         for (IModFile mod : loadedMods) {
             Path path = mod.getFilePath();
@@ -70,6 +85,7 @@ public final class RoxyDependencyLocator implements IDependencyLocator {
             } catch (IOException | RuntimeException ignored) {
             }
         }
+        if (voxyLoaded) addPreparedMacOsArm64Natives(loadedMods, pipeline);
     }
 
     @Override
@@ -108,12 +124,123 @@ public final class RoxyDependencyLocator implements IDependencyLocator {
         }
     }
 
+    private static boolean containsVoxy(List<IModFile> loadedMods) {
+        for (IModFile mod : loadedMods) {
+            Path path = mod.getFilePath();
+            if (path == null) continue;
+            if (path.getFileName().toString().toLowerCase(Locale.ROOT).startsWith("voxy")) return true;
+            try (JarContents contents = JarContents.of(path);
+                 InputStream input = RoxyJarContents.openFile(contents, "fabric.mod.json")) {
+                if (input == null) continue;
+                JsonObject metadata = JsonParser.parseReader(new InputStreamReader(input, StandardCharsets.UTF_8)).getAsJsonObject();
+                JsonElement id = metadata.get("id");
+                if (id != null && id.isJsonPrimitive() && id.getAsString().equals("voxy")) return true;
+            } catch (IOException | RuntimeException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private static void addPreparedMacOsArm64Natives(List<IModFile> loadedMods, IDiscoveryPipeline pipeline) {
+        if (!isMacOsArm64()) return;
+
+        List<Integer> missingNativeIndices = new java.util.ArrayList<>();
+        for (int index = 0; index < MACOS_ARM64_NATIVE_JARS.size(); index++) {
+            if (!containsBundledNativeResource(
+                    loadedMods,
+                    MACOS_ARM64_NATIVE_FILE_HINTS.get(index),
+                    MACOS_ARM64_NATIVE_ENTRIES.get(index))) {
+                missingNativeIndices.add(index);
+            }
+        }
+        if (missingNativeIndices.isEmpty()) return;
+
+        String configuredPath = System.getProperty(MACOS_NATIVE_PATH_PROPERTY);
+        if (configuredPath == null || configuredPath.isBlank()) {
+            System.err.println("[Roxy] Voxy's macOS arm64 native payloads are incomplete. Storage may fail to initialize. Run scripts/macos/prepare-natives.sh and set -D"
+                    + MACOS_NATIVE_PATH_PROPERTY + "=<repo>/.roxy-macos/natives.");
+            return;
+        }
+
+        Path nativeDirectory = Path.of(configuredPath).toAbsolutePath().normalize();
+        for (int index : missingNativeIndices) {
+            String jarName = MACOS_ARM64_NATIVE_JARS.get(index);
+            Path nativeJar = nativeDirectory.resolve(jarName);
+            if (!Files.isRegularFile(nativeJar)) {
+                throw new IllegalStateException("[Roxy] Required macOS arm64 native payload is missing: " + nativeJar
+                        + ". Run scripts/macos/prepare-natives.sh.");
+            }
+            try {
+                validatePreparedNativeJar(nativeJar, MACOS_ARM64_NATIVE_ENTRIES.get(index));
+                IModFile library = IModFile.create(
+                        SecureJar.from(JarContents.of(nativeJar)),
+                        JarModsDotTomlModFileReader::manifestParser,
+                        IModFile.Type.GAMELIBRARY,
+                        ModFileDiscoveryAttributes.DEFAULT);
+                pipeline.addModFile(library);
+            } catch (IOException | RuntimeException exception) {
+                throw new IllegalStateException("[Roxy] Could not add prepared macOS native payload " + nativeJar, exception);
+            }
+        }
+    }
+
+    private static boolean containsBundledNativeResource(
+            List<IModFile> loadedMods,
+            String fileNameHint,
+            String expectedEntry) {
+        for (IModFile mod : loadedMods) {
+            Path modPath = mod.getFilePath();
+            if (modPath == null) continue;
+            try (Source source = Source.open(modPath)) {
+                if (source == null) continue;
+                JsonArray jars = readJarsArray(source);
+                if (jars == null) continue;
+                for (JsonElement entry : jars) {
+                    if (!entry.isJsonObject()) continue;
+                    JsonElement file = entry.getAsJsonObject().get("file");
+                    if (file == null || !file.isJsonPrimitive()) continue;
+                    String fileName = file.getAsString();
+                    if (!fileName.toLowerCase(Locale.ROOT).endsWith(fileNameHint)) continue;
+                    byte[] nested = source.read(relocatedPath(fileName));
+                    if (nested == null) continue;
+                    try (ZipInputStream zip = new ZipInputStream(new java.io.ByteArrayInputStream(nested))) {
+                        ZipEntry nestedEntry;
+                        while ((nestedEntry = zip.getNextEntry()) != null) {
+                            if (nestedEntry.getName().equals(expectedEntry)) return true;
+                        }
+                    }
+                }
+            } catch (IOException | RuntimeException ignored) {
+            }
+        }
+        return false;
+    }
+
+    private static void validatePreparedNativeJar(Path path, String expectedEntry) throws IOException {
+        try (ZipFile archive = new ZipFile(path.toFile())) {
+            List<String> files = archive.stream()
+                    .filter(entry -> !entry.isDirectory())
+                    .map(ZipEntry::getName)
+                    .toList();
+            if (!files.equals(List.of(expectedEntry))) {
+                throw new IOException("Expected only native resource " + expectedEntry + " but found " + files);
+            }
+        }
+    }
+
+    private static boolean isMacOsArm64() {
+        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
+        String architecture = System.getProperty("os.arch", "").toLowerCase(Locale.ROOT);
+        return (os.contains("mac") || os.contains("darwin"))
+                && (architecture.equals("aarch64") || architecture.equals("arm64"));
+    }
+
     private static boolean containsForgifiedFabricLoader(List<IModFile> loadedMods) {
         for (IModFile mod : loadedMods) {
             Path path = mod.getFilePath();
             if (path != null) {
                 String fileName = path.getFileName().toString().toLowerCase(Locale.ROOT);
-                if (fileName.startsWith("forgified-fabric-loader-") || fileName.startsWith("forgified-fabric-api-")) {
+                if (fileName.startsWith("forgified-fabric-loader-")) {
                     return true;
                 }
             }
@@ -217,18 +344,10 @@ public final class RoxyDependencyLocator implements IDependencyLocator {
     }
 
     private static boolean isCurrentPlatformJar(String path) {
-        String normalized = path.replace('\\', '/').toLowerCase(Locale.ROOT);
-        if (!normalized.contains("-natives-")) {
-            return true;
-        }
-        String os = System.getProperty("os.name", "").toLowerCase(Locale.ROOT);
-        if (os.contains("win")) {
-            return normalized.contains("-natives-windows");
-        }
-        if (os.contains("mac") || os.contains("darwin")) {
-            return normalized.contains("-natives-macos") || normalized.contains("-natives-osx");
-        }
-        return !os.contains("linux") && !os.contains("unix") || normalized.contains("-natives-linux");
+        return RoxyNativePlatform.isCurrentPlatformJar(
+                path,
+                System.getProperty("os.name", ""),
+                System.getProperty("os.arch", ""));
     }
 
     private static boolean isProvidedLibrary(String path, boolean c2meOpenCl) {

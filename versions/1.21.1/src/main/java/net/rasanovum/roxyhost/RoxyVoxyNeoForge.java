@@ -40,8 +40,9 @@ public final class RoxyVoxyNeoForge {
                                 .requires(source -> TfcCompatConfig.enabled()).executes(context -> {
                             net.rasanovum.roxyhost.tfc.RoxyTfcBackfill.retryMissing();
                             net.rasanovum.roxy.tfc.TfcVoxyBridge.forceRefresh();
+                            net.rasanovum.roxyhost.tfc.RoxyTfcTerrainRefresh.forceRefresh();
                             context.getSource().sendSuccess(() -> net.minecraft.network.chat.Component.literal(
-                                    "Requested a background TFC leaf appearance refresh. "
+                                    "Requested a background TFC terrain appearance refresh. "
                                             + net.rasanovum.roxy.tfc.TfcVoxyBridge.status()), false);
                             return 1;
                         }))));
@@ -58,6 +59,8 @@ public final class RoxyVoxyNeoForge {
 
     private void onClientTick(ClientTickEvent.Post event) {
         RoxyVoxyLifecycle.tick();
+        if (net.minecraft.client.Minecraft.getInstance().level == null)
+            net.rasanovum.roxyhost.tfc.RoxyTfcTerrainRefresh.reset();
         net.rasanovum.roxyhost.tfc.RoxyTfcProgress.tick();
     }
 }

@@ -48,7 +48,6 @@ public final class RoxyShaderResourceMixin {
                 if (input != null) return roxy$patchShaderResource(path, input);
             }
         } catch (ClassNotFoundException | LinkageError ignored) {
-            // Sodium is a required dependency for Voxy, but keep the original missing-resource failure if its classloader is unavailable.
         }
 
         return roxy$patchShaderResource(

@@ -82,6 +82,8 @@ public final class RoxyBytecodeRemapper {
             "me/cortex/voxy/client/core/rendering/ISectionWatcher";
     private static final String VOXY_HIERARCHICAL_BIT_SET =
             "me/cortex/voxy/common/util/HierarchicalBitSet";
+    private static final String VOXY_MDIC_SECTION_RENDERER =
+            "me/cortex/voxy/client/core/rendering/section/backend/mdic/MDICSectionRenderer";
     private static final String FASTUTIL_LONG_INT_MAP =
             "it/unimi/dsi/fastutil/longs/Long2IntOpenHashMap";
     private static final String VOXY_WORLD_CALLBACK = "voxy$injectIdentifier";
@@ -137,8 +139,6 @@ public final class RoxyBytecodeRemapper {
     private static final String TEXTURE_ATLAS_COMPAT = "net/rasanovum/roxy/bridge/RoxyTextureAtlasBridge";
     private static final String VOXY_TEXTURE_BAKERY = "me/cortex/voxy/client/core/model/bakery/SoftwareModelTextureBakery";
     private static final String VOXY_MODEL_FACTORY = "me/cortex/voxy/client/core/model/ModelFactory";
-    private static final String VOXY_MDIC_SECTION_RENDERER =
-            "me/cortex/voxy/client/core/rendering/section/backend/mdic/MDICSectionRenderer";
     private static final String TEXTURE_COMPAT = "net/rasanovum/roxy/bridge/RoxyTextureBridge";
     private static final String VOXY_RASTERIZER = "Lme/cortex/voxy/client/core/model/bakery/SoftwareRasterizer;";
     private static final String VOXY_LIGHT_MAP_HELPER = "me/cortex/voxy/client/core/rendering/util/LightMapHelper";
@@ -178,6 +178,8 @@ public final class RoxyBytecodeRemapper {
     private static final String GL_STATE_MANAGER_NEW = "com/mojang/blaze3d/opengl/GlStateManager";
     private static final String GL_STATE_MANAGER_1_21_1 = "com/mojang/blaze3d/platform/GlStateManager";
     private static final String VOXY_RENDER_SYSTEM = "me/cortex/voxy/client/core/VoxyRenderSystem";
+    private static final String VOXY_MODEL_BAKERY = "me/cortex/voxy/client/core/model/ModelBakerySubsystem";
+    private static final String VOXY_MODEL_STORE = "me/cortex/voxy/client/core/model/ModelStore";
     private static final String VOXY_CLIENT_INSTANCE = "me/cortex/voxy/client/VoxyClientInstance";
     private static final String VOXY_CONFIG = "me/cortex/voxy/client/config/VoxyConfig";
     private static final String VOXY_CONFIG_MENU = "me/cortex/voxy/client/config/VoxyConfigMenu";
@@ -299,6 +301,8 @@ public final class RoxyBytecodeRemapper {
         output = patchVoxyModelFactory(output);
         output = patchVoxyIceModelFlags(output);
         output = RoxyTfcBytecodePatch.patch(output);
+        output = patchVoxyModelBakeryConstructorCleanup(output);
+        output = patchVoxyRenderSystemConstructorCleanup(output);
         output = patchVoxyFluidClassification(output);
         output = patchVoxyMetaFromLayer(output);
         output = patchVoxyVertexConsumer(output);
@@ -315,7 +319,89 @@ public final class RoxyBytecodeRemapper {
         output = patchVoxyConfigDefaults(output);
         output = patchVoxyConfigMenu(output);
         output = patchMinecraftVersionBridges(output);
+        output = patchMacOSGraphicsGuard(output);
+        output = patchVoxyJomlMemoryAccess(output);
         return patchFabricMetadata ? patchFabricMetadataAccess(output) : output;
+    }
+
+    private static byte[] patchVoxyJomlMemoryAccess(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        String className = reader.getClassName();
+        if (!className.startsWith("me/cortex/voxy/")) return input;
+
+        ClassWriter writer = new ClassWriter(reader, 0);
+        boolean[] changed = {false};
+        reader.accept(new org.objectweb.asm.ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public org.objectweb.asm.MethodVisitor visitMethod(int access, String name, String descriptor,
+                                                                 String signature, String[] exceptions) {
+                org.objectweb.asm.MethodVisitor delegate = super.visitMethod(access, name, descriptor,
+                        signature, exceptions);
+                return new org.objectweb.asm.MethodVisitor(Opcodes.ASM9, delegate) {
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String methodName,
+                                                String methodDescriptor, boolean isInterface) {
+                        String resultType = switch (owner) {
+                            case "org/joml/Matrix4f" -> "org/joml/Matrix4fc";
+                            case "org/joml/Vector4f" -> "org/joml/Vector4fc";
+                            case "org/joml/Vector3f" -> "org/joml/Vector3fc";
+                            case "org/joml/Vector3i" -> "org/joml/Vector3ic";
+                            case "org/joml/Vector2f" -> "org/joml/Vector2fc";
+                            case "org/joml/Vector2i" -> "org/joml/Vector2ic";
+                            default -> null;
+                        };
+                        boolean write = methodName.equals("getToAddress");
+                        boolean read = methodName.equals("setFromAddress")
+                                && (owner.equals("org/joml/Vector4f") || owner.equals("org/joml/Vector3f"));
+                        if ((!write && !read) || resultType == null) {
+                            super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, isInterface);
+                            return;
+                        }
+                        String expectedReturn = read ? owner : resultType;
+                        if (opcode != Opcodes.INVOKEVIRTUAL || isInterface
+                                || !methodDescriptor.equals("(J)L" + expectedReturn + ";")) {
+                            throw new IllegalStateException("Unsupported Voxy JOML memory call in " + className
+                                    + ": " + opcode + " " + owner + "." + methodName + methodDescriptor);
+                        }
+                        changed[0] = true;
+                        super.visitMethodInsn(Opcodes.INVOKESTATIC,
+                                "net/rasanovum/roxy/loader/RoxyJomlMemory",
+                                write ? "writeToAddress" : "readFromAddress",
+                                "(L" + owner + ";J)L" + expectedReturn + ";", false);
+                    }
+                };
+            }
+        }, 0);
+        return changed[0] ? writer.toByteArray() : input;
+    }
+
+    private static byte[] patchMacOSGraphicsGuard(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        if (!reader.getClassName().equals("me/cortex/voxy/client/VoxyClient")) return input;
+        var node = new org.objectweb.asm.tree.ClassNode();
+        reader.accept(node, ClassReader.EXPAND_FRAMES);
+        var method = node.methods.stream()
+                .filter(m -> m.name.equals("initVoxyClient") && m.desc.equals("()V"))
+                .findFirst().orElseThrow(() -> new IllegalStateException("Unsupported Voxy client initialization"));
+        for (var instruction : method.instructions.toArray()) {
+            if (instruction.getOpcode() == Opcodes.RETURN) {
+                method.instructions.insertBefore(instruction, new org.objectweb.asm.tree.MethodInsnNode(
+                        Opcodes.INVOKESTATIC, "net/rasanovum/roxy/loader/RoxyMacOSGraphics",
+                        "onVoxyInitialized", "()V", false));
+            }
+        }
+        var continuation = new org.objectweb.asm.tree.LabelNode();
+        var guard = new org.objectweb.asm.tree.InsnList();
+        guard.add(new org.objectweb.asm.tree.MethodInsnNode(Opcodes.INVOKESTATIC,
+                "net/rasanovum/roxy/loader/RoxyMacOSGraphics", "canInitializeVoxy", "()Z", false));
+        guard.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.IFNE, continuation));
+        guard.add(new org.objectweb.asm.tree.InsnNode(Opcodes.RETURN));
+        guard.add(continuation);
+        guard.add(new org.objectweb.asm.tree.FrameNode(Opcodes.F_NEW, 0, null, 0, null));
+        method.instructions.insert(guard);
+        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+        node.accept(writer);
+        return writer.toByteArray();
     }
 
     private static byte[] patchVoxyIrisDepthOutput(byte[] input) {
@@ -1600,7 +1686,6 @@ public final class RoxyBytecodeRemapper {
 
                 method.visitCode();
 
-                // Preserve Voxy's early-out for invisible block states.
                 method.visitVarInsn(Opcodes.ALOAD, 1);
                 method.visitMethodInsn(
                         Opcodes.INVOKEVIRTUAL,
@@ -1691,7 +1776,6 @@ public final class RoxyBytecodeRemapper {
                 );
                 method.visitVarInsn(Opcodes.ASTORE, 5);
 
-                // Direction[] faces = {DOWN, UP, NORTH, SOUTH, WEST, EAST, null};
                 method.visitIntInsn(Opcodes.BIPUSH, 7);
                 method.visitTypeInsn(Opcodes.ANEWARRAY, DIRECTION);
                 method.visitVarInsn(Opcodes.ASTORE, 6);
@@ -2154,7 +2238,6 @@ public final class RoxyBytecodeRemapper {
                 var add = previousRealInstruction(pointerStore);
                 var amount = previousRealInstruction(add);
                 var pointer = previousRealInstruction(amount);
-                // Only native bits 0..3 may be present before reserving bit 4 for ice.
                 return initialized && flagWrites == 4 && add != null && add.getOpcode() == Opcodes.LADD
                         && amount instanceof org.objectweb.asm.tree.LdcInsnNode constant
                         && constant.cst instanceof Long value && value == 24L
@@ -2283,6 +2366,218 @@ public final class RoxyBytecodeRemapper {
             }
         }, 0);
         return writer.toByteArray();
+    }
+
+    private static byte[] patchVoxyModelBakeryConstructorCleanup(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        if (!reader.getClassName().equals(VOXY_MODEL_BAKERY)) return input;
+
+        var node = new org.objectweb.asm.tree.ClassNode();
+        reader.accept(node, ClassReader.EXPAND_FRAMES);
+        int patched = 0;
+        for (org.objectweb.asm.tree.MethodNode method : node.methods) {
+            if (!method.name.equals("<init>")
+                    || !method.desc.equals("(Lme/cortex/voxy/common/world/other/Mapper;)V")) continue;
+
+            org.objectweb.asm.tree.LabelNode start = null;
+            org.objectweb.asm.tree.MethodInsnNode factoryConstructor = null;
+            for (org.objectweb.asm.tree.AbstractInsnNode instruction : method.instructions.toArray()) {
+                if (instruction instanceof org.objectweb.asm.tree.TypeInsnNode type
+                        && type.getOpcode() == Opcodes.NEW
+                        && type.desc.equals("me/cortex/voxy/client/core/model/ModelFactory")) {
+                    if (start != null) throw new IllegalStateException("Duplicate Voxy model factory allocation");
+                    start = new org.objectweb.asm.tree.LabelNode();
+                    method.instructions.insertBefore(instruction, start);
+                }
+                if (instruction instanceof org.objectweb.asm.tree.MethodInsnNode invocation
+                        && invocation.getOpcode() == Opcodes.INVOKESPECIAL
+                        && invocation.owner.equals("me/cortex/voxy/client/core/model/ModelFactory")
+                        && invocation.name.equals("<init>")
+                        && invocation.desc.equals("(Lme/cortex/voxy/common/world/other/Mapper;L"
+                        + VOXY_MODEL_STORE + ";)V")) {
+                    if (factoryConstructor != null) throw new IllegalStateException("Duplicate Voxy model factory constructor");
+                    factoryConstructor = invocation;
+                }
+            }
+
+            if (start == null || factoryConstructor == null) {
+                throw new IllegalStateException("Unsupported Voxy model bakery constructor");
+            }
+
+            org.objectweb.asm.tree.AbstractInsnNode factoryStore = factoryConstructor.getNext();
+            while (factoryStore != null && factoryStore.getOpcode() < 0) factoryStore = factoryStore.getNext();
+            if (!(factoryStore instanceof org.objectweb.asm.tree.FieldInsnNode field)
+                    || field.getOpcode() != Opcodes.PUTFIELD
+                    || !field.owner.equals(VOXY_MODEL_BAKERY)
+                    || !field.name.equals("factory")
+                    || !field.desc.equals("Lme/cortex/voxy/client/core/model/ModelFactory;")) {
+                throw new IllegalStateException("Unsupported Voxy model factory assignment");
+            }
+
+            org.objectweb.asm.tree.LabelNode end = new org.objectweb.asm.tree.LabelNode();
+            method.instructions.insert(factoryStore, end);
+            int primaryLocal = method.maxLocals;
+            int cleanupLocal = primaryLocal + 1;
+            method.maxLocals += 2;
+
+            org.objectweb.asm.tree.InsnList handler = new org.objectweb.asm.tree.InsnList();
+            org.objectweb.asm.tree.LabelNode handlerStart = new org.objectweb.asm.tree.LabelNode();
+            handler.add(handlerStart);
+            handler.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, primaryLocal));
+            org.objectweb.asm.tree.InsnList freeStore = new org.objectweb.asm.tree.InsnList();
+            freeStore.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 0));
+            freeStore.add(new org.objectweb.asm.tree.FieldInsnNode(
+                    Opcodes.GETFIELD, VOXY_MODEL_BAKERY, "storage", "L" + VOXY_MODEL_STORE + ";"));
+            freeStore.add(new org.objectweb.asm.tree.MethodInsnNode(
+                    Opcodes.INVOKEVIRTUAL, VOXY_MODEL_STORE, "free", "()V", false));
+            appendSuppressedCleanup(method, handler, primaryLocal, cleanupLocal, freeStore);
+            handler.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, primaryLocal));
+            handler.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ATHROW));
+            method.instructions.add(handler);
+            method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(
+                    start, end, handlerStart, "java/lang/Throwable"));
+            patched++;
+        }
+        if (patched != 1) throw new IllegalStateException("Unsupported Voxy model bakery constructor count: " + patched);
+
+        ClassWriter writer = new RoxyClassWriter(reader, ClassWriter.COMPUTE_FRAMES);
+        node.accept(writer);
+        return writer.toByteArray();
+    }
+
+    private static byte[] patchVoxyRenderSystemConstructorCleanup(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        if (!reader.getClassName().equals(VOXY_RENDER_SYSTEM)) return input;
+
+        var node = new org.objectweb.asm.tree.ClassNode();
+        reader.accept(node, ClassReader.EXPAND_FRAMES);
+        int patched = 0;
+        for (org.objectweb.asm.tree.MethodNode method : node.methods) {
+            if (!method.name.equals("<init>")
+                    || !method.desc.equals("(Lme/cortex/voxy/common/world/WorldEngine;"
+                    + "Lme/cortex/voxy/common/thread/ServiceManager;)V")) continue;
+
+            org.objectweb.asm.tree.TryCatchBlockNode constructorFailure = null;
+            int originalLocal = -1;
+            org.objectweb.asm.tree.VarInsnNode worldLoad = null;
+            org.objectweb.asm.tree.MethodInsnNode releaseRef = null;
+            for (org.objectweb.asm.tree.TryCatchBlockNode block : method.tryCatchBlocks) {
+                if (!"java/lang/RuntimeException".equals(block.type)) continue;
+                boolean hasRelease = false;
+                for (org.objectweb.asm.tree.AbstractInsnNode instruction = block.handler.getNext();
+                     instruction != null;
+                     instruction = instruction.getNext()) {
+                    if (instruction.getOpcode() < 0) continue;
+                    if (instruction instanceof org.objectweb.asm.tree.VarInsnNode variable
+                            && variable.getOpcode() == Opcodes.ASTORE && originalLocal < 0) {
+                        originalLocal = variable.var;
+                    }
+                    if (instruction instanceof org.objectweb.asm.tree.MethodInsnNode invocation
+                            && invocation.getOpcode() == Opcodes.INVOKEVIRTUAL
+                            && invocation.owner.equals("me/cortex/voxy/common/world/WorldEngine")
+                            && invocation.name.equals("releaseRef") && invocation.desc.equals("()V")) {
+                        org.objectweb.asm.tree.AbstractInsnNode load = previousRealInstruction(invocation);
+                        if (!(load instanceof org.objectweb.asm.tree.VarInsnNode variable)
+                                || variable.getOpcode() != Opcodes.ALOAD || variable.var != 1) {
+                            throw new IllegalStateException("Unsupported Voxy world reference release shape");
+                        }
+                        worldLoad = variable;
+                        releaseRef = invocation;
+                        hasRelease = true;
+                        break;
+                    }
+                    if (instruction instanceof org.objectweb.asm.tree.InsnNode insn
+                            && (insn.getOpcode() == Opcodes.ATHROW || insn.getOpcode() == Opcodes.RETURN)) break;
+                }
+                if (hasRelease) {
+                    if (constructorFailure != null) throw new IllegalStateException("Duplicate Voxy renderer constructor cleanup");
+                    constructorFailure = block;
+                }
+            }
+            if (constructorFailure == null || worldLoad == null || releaseRef == null || originalLocal < 0) {
+                throw new IllegalStateException("Unsupported Voxy renderer constructor cleanup");
+            }
+
+            constructorFailure.type = null;
+            int cleanupLocal = method.maxLocals;
+            int indexLocal = cleanupLocal + 1;
+            method.maxLocals += 2;
+
+            org.objectweb.asm.tree.InsnList restoreBindings = new org.objectweb.asm.tree.InsnList();
+            org.objectweb.asm.tree.LabelNode loop = new org.objectweb.asm.tree.LabelNode();
+            org.objectweb.asm.tree.LabelNode done = new org.objectweb.asm.tree.LabelNode();
+            restoreBindings.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ICONST_0));
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ISTORE, indexLocal));
+            restoreBindings.add(loop);
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, indexLocal));
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 3));
+            restoreBindings.add(new org.objectweb.asm.tree.InsnNode(Opcodes.ARRAYLENGTH));
+            restoreBindings.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.IF_ICMPGE, done));
+            restoreBindings.add(new org.objectweb.asm.tree.LdcInsnNode(37074));
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, indexLocal));
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 3));
+            restoreBindings.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ILOAD, indexLocal));
+            restoreBindings.add(new org.objectweb.asm.tree.InsnNode(Opcodes.IALOAD));
+            restoreBindings.add(new org.objectweb.asm.tree.MethodInsnNode(
+                    Opcodes.INVOKESTATIC, "org/lwjgl/opengl/GL30C", "glBindBufferBase", "(III)V", false));
+            restoreBindings.add(new org.objectweb.asm.tree.IincInsnNode(indexLocal, 1));
+            restoreBindings.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.GOTO, loop));
+            restoreBindings.add(done);
+            org.objectweb.asm.tree.InsnList beforeRelease = new org.objectweb.asm.tree.InsnList();
+            appendSuppressedCleanup(method, beforeRelease, originalLocal, cleanupLocal, restoreBindings);
+            method.instructions.insertBefore(worldLoad, beforeRelease);
+
+            org.objectweb.asm.tree.InsnList release = new org.objectweb.asm.tree.InsnList();
+            release.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, 1));
+            release.add(new org.objectweb.asm.tree.MethodInsnNode(
+                    Opcodes.INVOKEVIRTUAL,
+                    "me/cortex/voxy/common/world/WorldEngine",
+                    "releaseRef",
+                    "()V",
+                    false));
+            org.objectweb.asm.tree.InsnList beforeRethrow = new org.objectweb.asm.tree.InsnList();
+            appendSuppressedCleanup(method, beforeRethrow, originalLocal, cleanupLocal, release);
+            method.instructions.insertBefore(worldLoad, beforeRethrow);
+            method.instructions.remove(worldLoad);
+            method.instructions.remove(releaseRef);
+
+            patched++;
+        }
+        if (patched != 1) throw new IllegalStateException("Unsupported Voxy renderer constructor count: " + patched);
+
+        ClassWriter writer = new RoxyClassWriter(reader, ClassWriter.COMPUTE_FRAMES);
+        node.accept(writer);
+        return writer.toByteArray();
+    }
+
+    private static void appendSuppressedCleanup(
+            org.objectweb.asm.tree.MethodNode method,
+            org.objectweb.asm.tree.InsnList destination,
+            int primaryLocal,
+            int cleanupLocal,
+            org.objectweb.asm.tree.InsnList cleanup
+    ) {
+        org.objectweb.asm.tree.LabelNode start = new org.objectweb.asm.tree.LabelNode();
+        org.objectweb.asm.tree.LabelNode end = new org.objectweb.asm.tree.LabelNode();
+        org.objectweb.asm.tree.LabelNode handler = new org.objectweb.asm.tree.LabelNode();
+        org.objectweb.asm.tree.LabelNode done = new org.objectweb.asm.tree.LabelNode();
+        org.objectweb.asm.tree.LabelNode sameThrowable = new org.objectweb.asm.tree.LabelNode();
+        destination.add(start);
+        destination.add(cleanup);
+        destination.add(end);
+        destination.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.GOTO, done));
+        destination.add(handler);
+        destination.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ASTORE, cleanupLocal));
+        destination.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, cleanupLocal));
+        destination.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, primaryLocal));
+        destination.add(new org.objectweb.asm.tree.JumpInsnNode(Opcodes.IF_ACMPEQ, sameThrowable));
+        destination.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, primaryLocal));
+        destination.add(new org.objectweb.asm.tree.VarInsnNode(Opcodes.ALOAD, cleanupLocal));
+        destination.add(new org.objectweb.asm.tree.MethodInsnNode(
+                Opcodes.INVOKEVIRTUAL, "java/lang/Throwable", "addSuppressed", "(Ljava/lang/Throwable;)V", false));
+        destination.add(sameThrowable);
+        destination.add(done);
+        method.tryCatchBlocks.add(new org.objectweb.asm.tree.TryCatchBlockNode(start, end, handler, "java/lang/Throwable"));
     }
 
     private static byte[] patchVoxyRenderSystemWorkDrain(byte[] input) {
@@ -2815,7 +3110,7 @@ public final class RoxyBytecodeRemapper {
                 method.visitInsn(Opcodes.ICONST_4);
                 method.visitIntInsn(Opcodes.NEWARRAY, Opcodes.T_INT);
                 method.visitVarInsn(Opcodes.ASTORE, 10);
-                method.visitIntInsn(Opcodes.SIPUSH, 2978); // GL_VIEWPORT
+                method.visitIntInsn(Opcodes.SIPUSH, 2978);
                 method.visitVarInsn(Opcodes.ALOAD, 10);
                 method.visitMethodInsn(
                         Opcodes.INVOKESTATIC,
@@ -3508,7 +3803,6 @@ public final class RoxyBytecodeRemapper {
                 return new MethodVisitor(Opcodes.ASM9, original) {
                     @Override
                     public AnnotationVisitor visitAnnotation(String annotation, boolean visible) {
-                        // Strip the original Mixin annotation before adding the bridge annotation.
                         if (annotation.equals(INJECT)) return null;
                         return super.visitAnnotation(annotation, visible);
                     }
@@ -3546,7 +3840,7 @@ public final class RoxyBytecodeRemapper {
                 int key = properties + 1;
                 int registryManager = key + 1;
                 int dimensionEntry = registryManager + 1;
-                int isClient = dimensionEntry + 2; // skip the Supplier
+                int isClient = dimensionEntry + 2;
                 int debugWorld = isClient + 1;
                 int seed = debugWorld + 1;
                 int maxChainedNeighborUpdates = seed + 2;
@@ -4387,11 +4681,11 @@ public final class RoxyBytecodeRemapper {
 
         String processDescriptor = "(L" + VOXY_RENDER_DATA_FACTORY
                 + ";Lit/unimi/dsi/fastutil/ints/IntOpenHashSet;)V";
-        String consumerDescriptor = "(Ljava/lang/Object;)V";
         int[] enqueueMatched = new int[1];
         int[] liveHookInjected = new int[1];
         int[] computeMatched = new int[1];
         int[] creationHookInjected = new int[1];
+        int[] resultConsumerSetterMatched = new int[1];
         ClassWriter writer = new RoxyClassWriter(reader, ClassWriter.COMPUTE_FRAMES);
         reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
             @Override
@@ -4403,6 +4697,25 @@ public final class RoxyBytecodeRemapper {
                 String[] exceptions
             ) {
                 MethodVisitor method = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (name.equals("setResultConsumer")
+                        && descriptor.equals("(Ljava/util/function/Consumer;)V")) {
+                    resultConsumerSetterMatched[0]++;
+                    return new MethodVisitor(Opcodes.ASM9, method) {
+                        @Override
+                        public void visitCode() {
+                            super.visitCode();
+                            super.visitVarInsn(Opcodes.ALOAD, 1);
+                            super.visitMethodInsn(
+                                    Opcodes.INVOKESTATIC,
+                                    VOXY_RENDER_COMPAT,
+                                    "wrapResultConsumer",
+                                    "(Ljava/util/function/Consumer;)Ljava/util/function/Consumer;",
+                                    false
+                            );
+                            super.visitVarInsn(Opcodes.ASTORE, 1);
+                        }
+                    };
+                }
                 if (name.equals("enqueueTask") && descriptor.equals("(J)V")) {
                     enqueueMatched[0]++;
                     return new MethodVisitor(Opcodes.ASM9, method) {
@@ -4564,17 +4877,6 @@ public final class RoxyBytecodeRemapper {
                                 && methodDescriptor.equals("(Ljava/lang/Object;)Z")) {
                             super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, isInterface);
                             retryQueueAddPending = true;
-                        } else if (opcode == Opcodes.INVOKEINTERFACE
-                                && owner.equals("java/util/function/Consumer")
-                                && methodName.equals("accept")
-                                && methodDescriptor.equals(consumerDescriptor)) {
-                            super.visitMethodInsn(
-                                    Opcodes.INVOKESTATIC,
-                                    VOXY_RENDER_COMPAT,
-                                    "acceptIfCurrent",
-                                    "(Ljava/util/function/Consumer;Ljava/lang/Object;)V",
-                                    false
-                            );
                         } else {
                             super.visitMethodInsn(opcode, owner, methodName, methodDescriptor, isInterface);
                         }
@@ -4585,6 +4887,7 @@ public final class RoxyBytecodeRemapper {
             }
         }, 0);
         if (enqueueMatched[0] != 1
+                || resultConsumerSetterMatched[0] != 1
                 || liveHookInjected[0] != 1
                 || computeMatched[0] != 1
                 || creationHookInjected[0] != 1) {
