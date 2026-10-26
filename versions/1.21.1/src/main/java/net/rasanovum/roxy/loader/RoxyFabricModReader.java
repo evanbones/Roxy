@@ -75,8 +75,22 @@ public final class RoxyFabricModReader implements IModFileReader {
 
         Path original = jar.getPrimaryPath();
         RoxyCrashReportHeader.patching(original);
+        String modId = string(fabricMetadata, "id", "fabricmod");
+        Path cached = RoxyCache.patchedJar(original, modId, isClassAvailable(SODIUM_FOG_STORAGE), patchInputs());
+        if (cached != null && Files.isRegularFile(cached)) {
+            try {
+                IModFile modFile = JarModsDotTomlModFileReader.createModFile(JarContents.of(cached), attributes);
+                RoxyCrashReportHeader.patched(original);
+                return modFile;
+            } catch (RuntimeException e) {
+                RoxyCache.deleteQuietly(cached);
+            }
+        }
         try {
             Path patched = patchJar(original, fabricMetadata);
+            if (cached != null) {
+                RoxyCache.store(patched, cached, "roxy-patched-" + modId + "-");
+            }
             IModFile modFile = JarModsDotTomlModFileReader.createModFile(JarContents.of(patched), attributes);
             RoxyCrashReportHeader.patched(original);
             return modFile;
@@ -87,6 +101,21 @@ public final class RoxyFabricModReader implements IModFileReader {
             RoxyCrashReportHeader.failed(throwable);
             throw throwable;
         }
+    }
+
+    private static List<String> patchInputs() {
+        List<String> inputs = new ArrayList<>(List.of(
+                SUPPLEMENTAL_SHADER_MIXIN,
+                SUPPLEMENTAL_WORLDGEN_MIXIN,
+                "roxy/mappings/client-1.21.1.txt",
+                "roxy/mappings/intermediary-1.21.1.tiny",
+                "net/rasanovum/roxy/loader/RoxyFabricModReader.class",
+                "net/rasanovum/roxy/loader/RoxyBytecodeRemapper.class",
+                "net/rasanovum/roxy/loader/RoxyMappings.class",
+                "net/rasanovum/roxy/loader/RoxyTfcBytecodePatch.class"
+        ));
+        inputs.addAll(new java.util.TreeSet<>(EMBEDDED_HOST_CLASSES.values()));
+        return inputs;
     }
 
     private static Path patchJar(Path original, JsonObject fabricMetadata) throws IOException {
