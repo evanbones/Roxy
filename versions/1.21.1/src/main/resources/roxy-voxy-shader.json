@@ -16,7 +16,6 @@
         "RoxyLodIrisExtendedShaderMixin",
         "RoxyLodColorwheelSourcesMixin",
         "RoxyLodColorwheelProgramMixin",
-        "RoxyClientLevelEntityMixin",
         "RoxyShaderResourceMixin",
         "RoxySoftwareRasterizerMixin",
         "RoxyFogRendererMixin",

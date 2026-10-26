@@ -5,11 +5,8 @@ import net.neoforged.bus.api.IEventBus;
 import net.neoforged.fml.common.Mod;
 import net.neoforged.fml.event.lifecycle.FMLClientSetupEvent;
 import net.neoforged.neoforge.client.event.RegisterClientCommandsEvent;
-import net.neoforged.neoforge.client.event.RenderLevelStageEvent;
 import net.neoforged.neoforge.client.event.ClientTickEvent;
 import net.neoforged.neoforge.common.NeoForge;
-import net.neoforged.neoforge.event.entity.EntityLeaveLevelEvent;
-import net.rasanovum.roxy.compat.RoxyPowerGridCompat;
 import net.rasanovum.roxy.patch.RoxyVoxyLifecycle;
 import net.rasanovum.roxy.loader.RoxyFabricRuntime;
 import net.rasanovum.roxy.loader.RoxyCrashReportHeader;
@@ -22,9 +19,7 @@ public final class RoxyVoxyNeoForge {
         RoxyCrashReportHeader.register();
         modBus.addListener(this::onClientSetup);
         NeoForge.EVENT_BUS.addListener(this::onRegisterClientCommands);
-        NeoForge.EVENT_BUS.addListener(this::onRenderLevelStage);
         NeoForge.EVENT_BUS.addListener(this::onClientTick);
-        NeoForge.EVENT_BUS.addListener(this::onEntityLeaveLevel);
         NeoForge.EVENT_BUS.addListener(RoxyClientWarnings::onScreenOpening);
     }
 
@@ -61,17 +56,8 @@ public final class RoxyVoxyNeoForge {
         }
     }
 
-    private void onRenderLevelStage(RenderLevelStageEvent event) {
-        RoxyPowerGridCompat.render(event);
-    }
-
     private void onClientTick(ClientTickEvent.Post event) {
         RoxyVoxyLifecycle.tick();
-        RoxyPowerGridCompat.tick();
         net.rasanovum.roxyhost.tfc.RoxyTfcProgress.tick();
-    }
-
-    private void onEntityLeaveLevel(EntityLeaveLevelEvent event) {
-        RoxyPowerGridCompat.markServerRemoval(event.getEntity(), event.getLevel());
     }
 }
