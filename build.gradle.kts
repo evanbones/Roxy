@@ -175,20 +175,35 @@ project(":1.21.1") {
             .output
         val fabricStubsJar = tasks.register<Jar>("fabricStubsJar") {
             archiveFileName.set("roxy-fabric-stubs.jar")
+            destinationDirectory.set(layout.buildDirectory.dir("stubs"))
             from(mainOutput) {
                 include("net/fabricmc/**")
+                exclude("net/fabricmc/fabric/api/client/command/**")
+            }
+            manifest {
+                attributes["FMLModType"] = "LIBRARY"
+            }
+        }
+        val fabricCommandStubsJar = tasks.register<Jar>("fabricCommandStubsJar") {
+            archiveFileName.set("roxy-fabric-command-stubs.jar")
+            destinationDirectory.set(layout.buildDirectory.dir("stubs"))
+            from(mainOutput) {
+                include("net/fabricmc/fabric/api/client/command/**")
             }
             manifest {
                 attributes["FMLModType"] = "LIBRARY"
             }
         }
         tasks.named<Jar>("jar") {
-            dependsOn(fabricStubsJar)
+            dependsOn(fabricStubsJar, fabricCommandStubsJar)
             exclude("net/fabricmc/**")
             exclude("net/rasanovum/roxyhost/**")
             exclude("net/rasanovum/roxy/client/RoxyClientWarnings*.class")
             exclude("net/rasanovum/roxy/client/RoxyWarningScreen.class")
             from(fabricStubsJar.map { it.archiveFile }) {
+                into("META-INF/jars")
+            }
+            from(fabricCommandStubsJar.map { it.archiveFile }) {
                 into("META-INF/jars")
             }
         }
@@ -208,7 +223,7 @@ project(":1.21.1") {
             into(packagedMainClassesDir)
         }
         val packagedRoxy = tasks.register<Copy>("copyPackagedRoxyToRunMods") {
-            dependsOn(prepareClientRun, tasks.named<Jar>("jar"), fabricStubsJar, packagedMainClasses)
+            dependsOn(prepareClientRun, tasks.named<Jar>("jar"), fabricStubsJar, fabricCommandStubsJar, packagedMainClasses)
             from(tasks.named<Jar>("jar"))
             into(layout.projectDirectory.dir("runs/client/mods"))
             doFirst {
@@ -216,6 +231,7 @@ project(":1.21.1") {
                     include("roxy-*.jar")
                 }.files.forEach { it.delete() }
                 layout.projectDirectory.file("runs/client/mods/roxy-fabric-stubs.jar").asFile.delete()
+                layout.projectDirectory.file("runs/client/mods/roxy-fabric-command-stubs.jar").asFile.delete()
             }
         }
 

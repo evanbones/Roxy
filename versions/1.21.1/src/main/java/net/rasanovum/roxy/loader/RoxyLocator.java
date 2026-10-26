@@ -129,7 +129,7 @@ public final class RoxyLocator implements IModFileCandidateLocator {
         return null;
     }
 
-    private static List<Path> ownModPaths() {
+    static List<Path> ownModPaths() {
         String modFolders = System.getenv("MOD_CLASSES");
         if (modFolders == null) {
             modFolders = System.getProperty("fml.modFolders", "");
