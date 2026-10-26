@@ -300,7 +300,6 @@ public final class RoxyBytecodeRemapper {
         output = patchVoxyModelTinting(output);
         output = patchVoxyModelFactory(output);
         output = patchVoxyIceModelFlags(output);
-        output = RoxyTfcBytecodePatch.patch(output);
         output = patchVoxyModelBakeryConstructorCleanup(output);
         output = patchVoxyRenderSystemConstructorCleanup(output);
         output = patchVoxyFluidClassification(output);
@@ -1747,8 +1746,6 @@ public final class RoxyBytecodeRemapper {
                 method.visitMethodInsn(Opcodes.INVOKESTATIC,
                         "net/rasanovum/roxy/compat/RoxyCreateStaticModelCompat", "wrap",
                         "(Ljava/lang/Object;Ljava/lang/Object;)Ljava/lang/Object;", false);
-                method.visitMethodInsn(Opcodes.INVOKESTATIC, "net/rasanovum/roxy/tfc/TfcVoxyBridge",
-                        "bakedModel", "(Ljava/lang/Object;)Ljava/lang/Object;", false);
                 method.visitTypeInsn(Opcodes.CHECKCAST, BAKED_MODEL);
                 method.visitVarInsn(Opcodes.ASTORE, 3);
 

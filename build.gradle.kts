@@ -250,34 +250,6 @@ project(":1.21.1") {
                 into("roxy/embedded")
                 rename { "RoxyFogOptions.bin" }
             }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcAdapter.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcAdapter.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcImport.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcImport.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcProgress.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcProgress.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcProgress\$Visibility.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcProgress\$Visibility.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcBackfill.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcBackfill.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcTerrainRefresh.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcTerrainRefresh.bin" }
-            }
-            from(layout.buildDirectory.file("classes/java/main/net/rasanovum/roxyhost/tfc/RoxyTfcImport\$ChunkCapture.class")) {
-                into("roxy/embedded")
-                rename { "RoxyTfcImport\$ChunkCapture.bin" }
-            }
             from(layout.buildDirectory.dir("classes/java/main/net/rasanovum/roxy/client")) {
                 include("RoxyClientWarnings*.class", "RoxyWarningScreen.class")
                 into("roxy/embedded")

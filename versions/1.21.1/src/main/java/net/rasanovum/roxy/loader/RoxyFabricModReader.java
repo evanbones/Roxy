@@ -34,13 +34,6 @@ public final class RoxyFabricModReader implements IModFileReader {
     private static final String SUPPLEMENTAL_SHADER_MIXIN = "roxy-voxy-shader.json";
     private static final String SUPPLEMENTAL_WORLDGEN_MIXIN = "roxy-voxy-worldgen.json";
     private static final Map<String, String> EMBEDDED_HOST_CLASSES = Map.ofEntries(
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcBackfill.class", "roxy/embedded/RoxyTfcBackfill.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcTerrainRefresh.class", "roxy/embedded/RoxyTfcTerrainRefresh.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcProgress.class", "roxy/embedded/RoxyTfcProgress.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcProgress$Visibility.class", "roxy/embedded/RoxyTfcProgress$Visibility.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcAdapter.class", "roxy/embedded/RoxyTfcAdapter.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcImport.class", "roxy/embedded/RoxyTfcImport.bin"),
-            Map.entry("net/rasanovum/roxyhost/tfc/RoxyTfcImport$ChunkCapture.class", "roxy/embedded/RoxyTfcImport$ChunkCapture.bin"),
             Map.entry("net/rasanovum/roxyhost/RoxyFogOptions.class", "roxy/embedded/RoxyFogOptions.bin"),
             Map.entry("net/rasanovum/roxyhost/RoxyChunkBoundaryMask.class", "roxy/embedded/RoxyChunkBoundaryMask.bin"),
             Map.entry("net/rasanovum/roxyhost/RoxyPalettedContainerFactory.class", "roxy/embedded/RoxyPalettedContainerFactory.bin"),
@@ -130,8 +123,7 @@ public final class RoxyFabricModReader implements IModFileReader {
                 "roxy/mappings/intermediary-1.21.1.tiny",
                 "net/rasanovum/roxy/loader/RoxyFabricModReader.class",
                 "net/rasanovum/roxy/loader/RoxyBytecodeRemapper.class",
-                "net/rasanovum/roxy/loader/RoxyMappings.class",
-                "net/rasanovum/roxy/loader/RoxyTfcBytecodePatch.class"
+                "net/rasanovum/roxy/loader/RoxyMappings.class"
         ));
         inputs.addAll(new java.util.TreeSet<>(EMBEDDED_HOST_CLASSES.values()));
         return inputs;
