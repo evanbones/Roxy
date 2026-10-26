@@ -12,6 +12,7 @@ import java.util.WeakHashMap;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ConcurrentMap;
 import java.util.concurrent.atomic.AtomicLong;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.function.Consumer;
 
 public final class RoxyVoxyRenderPatch {
@@ -40,7 +41,7 @@ public final class RoxyVoxyRenderPatch {
     private static final Map<TaskPositionKey, Long> LATEST_EPOCHS = new HashMap<>();
     private static final Map<TaskPositionKey, Integer> IN_FLIGHT_COUNTS = new HashMap<>();
     private static final ConcurrentMap<PendingTaskKey, Boolean> PENDING_RENDER_TASKS = new ConcurrentHashMap<>();
-    private static final Object PUBLICATION_LOCK = new Object();
+    private static final ReentrantLock PUBLICATION_LOCK = new ReentrantLock();
     private static final Object RENDER_LOCK = new Object();
     private static final ThreadLocal<TaskStamp> TASK_STAMP = new ThreadLocal<>();
     private static volatile boolean taskPositionFailure;
@@ -71,7 +72,8 @@ public final class RoxyVoxyRenderPatch {
 
     public static void observeWorld(Object world) {
         if (world == null) return;
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             boolean changed;
             synchronized (RENDER_LOCK) {
                 if (worldObserved && worldToken == world) return;
@@ -81,12 +83,15 @@ public final class RoxyVoxyRenderPatch {
                 worldObserved = true;
             }
             if (changed) resetState(true);
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
     public static void observeWorld(Object world, Object worldEngine) {
         if (world == null) return;
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             boolean changed;
             synchronized (RENDER_LOCK) {
                 if (worldObserved && worldToken == world) {
@@ -99,15 +104,36 @@ public final class RoxyVoxyRenderPatch {
                 worldObserved = true;
             }
             if (changed) resetState(true);
+        } finally {
+            PUBLICATION_LOCK.unlock();
+        }
+    }
+
+    public static void forgetWorld() {
+        PUBLICATION_LOCK.lock();
+        try {
+            boolean observed;
+            synchronized (RENDER_LOCK) {
+                observed = worldObserved;
+                worldToken = null;
+                worldEngineToken = null;
+                worldObserved = false;
+            }
+            if (observed) resetState(true);
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
     public static void observeEngine(Object worldEngine) {
         if (worldEngine == null) return;
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             synchronized (RENDER_LOCK) {
                 worldEngineToken = worldEngine;
             }
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
@@ -126,11 +152,14 @@ public final class RoxyVoxyRenderPatch {
                 }
                 return;
             }
-            synchronized (PUBLICATION_LOCK) {
+            PUBLICATION_LOCK.lock();
+            try {
                 synchronized (RENDER_LOCK) {
                     if (activeRenderGenerationService != renderGenerationService) return;
                 }
                 resetState(false);
+            } finally {
+                PUBLICATION_LOCK.unlock();
             }
         } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
             if (!rendererLookupFailure) {
@@ -142,7 +171,8 @@ public final class RoxyVoxyRenderPatch {
 
     private static void resetState(boolean clearPendingRenderTasks) {
         RoxyVoxyWorkDrain.reset();
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             synchronized (RENDER_LOCK) {
                 Object retiredService = activeRenderGenerationService;
                 if (!clearPendingRenderTasks) rememberRendererTasksLocked(retiredService);
@@ -172,6 +202,8 @@ public final class RoxyVoxyRenderPatch {
                 serviceLookupFailure = false;
                 enqueueFailure = false;
             }
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
         RoxyVoxyRequestPatch.reset();
     }
@@ -179,7 +211,8 @@ public final class RoxyVoxyRenderPatch {
     public static void registerRenderer(Object renderer) {
         if (renderer == null) return;
         try {
-            synchronized (PUBLICATION_LOCK) {
+            PUBLICATION_LOCK.lock();
+            try {
                 Field renderGeneration = RENDER_GENERATION_FIELDS.computeIfAbsent(
                         renderer.getClass(),
                         RoxyVoxyRenderPatch::resolveRenderGeneration
@@ -206,6 +239,8 @@ public final class RoxyVoxyRenderPatch {
                     SERVICE_WORLDS.put(renderGenerationService, WORLD_GENERATION.get());
                     activeRenderGenerationService = renderGenerationService;
                 }
+            } finally {
+                PUBLICATION_LOCK.unlock();
             }
         } catch (ReflectiveOperationException | RuntimeException | LinkageError exception) {
             if (!rendererLookupFailure) {
@@ -334,7 +369,8 @@ public final class RoxyVoxyRenderPatch {
     }
 
     public static void flushPendingRenderTasks() {
-        synchronized (PUBLICATION_LOCK) {
+        if (!PUBLICATION_LOCK.tryLock()) return;
+        try {
             int flushed = 0;
             while (flushed < 32) {
                 Object renderGenerationService;
@@ -387,13 +423,16 @@ public final class RoxyVoxyRenderPatch {
                 if (!enqueued) return;
                 flushed++;
             }
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
     @SuppressWarnings("unchecked")
     public static void acceptIfCurrent(Consumer<?> consumer, Object result) {
         TaskStamp taskStamp = TASK_STAMP.get();
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             boolean discard;
             boolean requeue = false;
             synchronized (RENDER_LOCK) {
@@ -443,6 +482,8 @@ public final class RoxyVoxyRenderPatch {
                 }
                 if (completionRequeue) requeue(taskStamp);
             }
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
@@ -460,7 +501,8 @@ public final class RoxyVoxyRenderPatch {
     public static void finishRenderTask(boolean failed) {
         TaskStamp taskStamp = TASK_STAMP.get();
         if (taskStamp == null) return;
-        synchronized (PUBLICATION_LOCK) {
+        PUBLICATION_LOCK.lock();
+        try {
             if (failed) {
                 synchronized (RENDER_LOCK) {
                     retainFailedTaskLocked(taskStamp);
@@ -473,6 +515,8 @@ public final class RoxyVoxyRenderPatch {
                 requeue = finishRenderTaskLocked(taskStamp);
             }
             if (requeue) requeue(taskStamp);
+        } finally {
+            PUBLICATION_LOCK.unlock();
         }
     }
 
@@ -814,12 +858,7 @@ public final class RoxyVoxyRenderPatch {
     ) {
     }
 
-    private static final class TaskState {
-        private final long world;
-
-        private TaskState(long world) {
-            this.world = world;
-        }
+    private record TaskState(long world) {
     }
 
     private record TaskKey(Object renderGenerationService, long position, Object task) {

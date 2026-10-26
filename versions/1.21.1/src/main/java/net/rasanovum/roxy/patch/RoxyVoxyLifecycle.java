@@ -38,6 +38,7 @@ public final class RoxyVoxyLifecycle {
                     engine = currentEngine;
                     renderer = null;
                     rendererReady = false;
+                    if (level == null) RoxyVoxyRenderPatch.forgetWorld();
                 }
                 return;
             }
