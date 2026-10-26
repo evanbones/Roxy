@@ -1,5 +1,6 @@
 package net.rasanovum.roxy.compat;
 
+import net.rasanovum.roxy.fog.RoxyVoxyFogPatch;
 import org.lwjgl.opengl.GL33C;
 
 import java.lang.reflect.Method;
@@ -13,9 +14,13 @@ public final class RoxyBetterFogCompat {
     public static void glUniform4f(int location, float x, float y, float z, float w) {
         float[] values = uniform(location);
         if (values != null && values.length >= 4) {
-            GL33C.glUniform4f(location, values[0], values[1], values[2], values[3]);
-            return;
+            x = values[0];
+            y = values[1];
+            z = values[2];
+            w = values[3];
         }
+        RoxyVoxyFogPatch.captureLodFog(location, x, y, z, w);
+        if (location == 5 && RoxyVoxyFogPatch.terrainFogActive()) w = 0.0F;
         GL33C.glUniform4f(location, x, y, z, w);
     }
 

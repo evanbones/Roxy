@@ -272,6 +272,8 @@ public final class RoxyBytecodeRemapper {
         output = patchVoxyMissingStates(output);
         output = patchVoxyTextureTintUpload(output);
         output = patchVoxyNormalFog(output);
+        output = patchVoxyTerrainFogUpload(output);
+        output = patchVoxySsaoFogUpload(output);
         output = patchVoxyChunkSectionLayer(output);
         output = patchVoxyWorldCallback(output);
         output = patchVoxyNodeStore(output);
@@ -558,6 +560,75 @@ public final class RoxyBytecodeRemapper {
         }, 0);
         if (matches[0] != 1 || matches[1] != 1 || matches[2] != 4)
             throw new IllegalStateException("Unsupported Voxy normal fog pipeline");
+        return writer.toByteArray();
+    }
+
+    private static byte[] patchVoxyTerrainFogUpload(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        if (!reader.getClassName().equals(VOXY_MDIC_SECTION_RENDERER)) return input;
+        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+        int[] matches = new int[1];
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                return new MethodVisitor(Opcodes.ASM9, super.visitMethod(access, name, descriptor, signature, exceptions)) {
+                    private boolean terrainShader;
+
+                    @Override
+                    public void visitFieldInsn(int opcode, String owner, String field, String desc) {
+                        terrainShader = opcode == Opcodes.GETFIELD && owner.equals(VOXY_MDIC_SECTION_RENDERER)
+                                && (field.equals("terrainShader") || field.equals("translucentTerrainShader"));
+                        super.visitFieldInsn(opcode, owner, field, desc);
+                    }
+
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String called, String desc, boolean itf) {
+                        super.visitMethodInsn(opcode, owner, called, desc, itf);
+                        if (terrainShader && called.equals("bind") && desc.equals("()V")) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "net/rasanovum/roxy/fog/RoxyVoxyFogPatch", "uploadTerrainFog", "()V", false);
+                            matches[0]++;
+                        }
+                        terrainShader = false;
+                    }
+                };
+            }
+        }, 0);
+        if (matches[0] != 2) throw new IllegalStateException("Unsupported Voxy section renderer fog binding");
+        return writer.toByteArray();
+    }
+
+    private static byte[] patchVoxySsaoFogUpload(byte[] input) {
+        ClassReader reader = new ClassReader(input);
+        if (!reader.getClassName().equals("me/cortex/voxy/client/core/SSAO")) return input;
+        ClassWriter writer = new ClassWriter(reader, ClassWriter.COMPUTE_MAXS);
+        int[] matches = new int[1];
+        reader.accept(new ClassVisitor(Opcodes.ASM9, writer) {
+            @Override
+            public MethodVisitor visitMethod(int access, String name, String descriptor, String signature, String[] exceptions) {
+                MethodVisitor method = super.visitMethod(access, name, descriptor, signature, exceptions);
+                if (!name.equals("computeSSAO")) return method;
+                return new MethodVisitor(Opcodes.ASM9, method) {
+                    private boolean ssaoShader;
+
+                    @Override
+                    public void visitFieldInsn(int opcode, String owner, String field, String desc) {
+                        ssaoShader = opcode == Opcodes.GETFIELD && field.equals("ssaoCompute");
+                        super.visitFieldInsn(opcode, owner, field, desc);
+                    }
+
+                    @Override
+                    public void visitMethodInsn(int opcode, String owner, String called, String desc, boolean itf) {
+                        super.visitMethodInsn(opcode, owner, called, desc, itf);
+                        if (ssaoShader && called.equals("bind") && desc.equals("()V")) {
+                            super.visitMethodInsn(Opcodes.INVOKESTATIC, "net/rasanovum/roxy/fog/RoxyVoxyFogPatch", "uploadTerrainFog", "()V", false);
+                            matches[0]++;
+                        }
+                        ssaoShader = false;
+                    }
+                };
+            }
+        }, 0);
+        if (matches[0] != 1) throw new IllegalStateException("Unsupported Voxy SSAO fog binding");
         return writer.toByteArray();
     }
 

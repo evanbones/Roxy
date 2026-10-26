@@ -1,5 +1,6 @@
 package net.rasanovum.roxy.fog;
 
+import org.lwjgl.opengl.GL33C;
 import java.lang.reflect.Field;
 import java.lang.reflect.Method;
 import net.rasanovum.roxy.compat.RoxyFogModCompat;
@@ -15,6 +16,9 @@ public final class RoxyVoxyFogPatch {
     private static final String MINECRAFT_RENDER_SYSTEM = "com.mojang.blaze3d.systems.RenderSystem";
     private static final float NO_FOG = 1.0E9F;
     private static int extendedFogMode;
+    private static volatile boolean terrainFogActive;
+    private static final float[] lodFogEnd = new float[4];
+    private static final float[] lodFogColour = new float[4];
     private static final RoxyWeatherFog WEATHER = new RoxyWeatherFog();
     private static WeakReference<Object> diagnosticRenderer = new WeakReference<>(null);
     private static int diagnosticCount;
@@ -158,6 +162,25 @@ public final class RoxyVoxyFogPatch {
         } catch (ReflectiveOperationException | RuntimeException exception) {
             return false;
         }
+    }
+
+    public static boolean terrainFogActive() {
+        return terrainFogActive;
+    }
+
+    public static void captureLodFog(int location, float x, float y, float z, float w) {
+        float[] target = location == 4 ? lodFogEnd : location == 5 ? lodFogColour : null;
+        if (target == null) return;
+        target[0] = x;
+        target[1] = y;
+        target[2] = z;
+        target[3] = w;
+    }
+
+    public static void uploadTerrainFog() {
+        terrainFogActive = true;
+        GL33C.glUniform4f(40, lodFogEnd[0], lodFogEnd[1], lodFogEnd[2], lodFogEnd[3]);
+        GL33C.glUniform4f(41, lodFogColour[0], lodFogColour[1], lodFogColour[2], lodFogColour[3]);
     }
 
     public static float opacityLimit(float original) {
