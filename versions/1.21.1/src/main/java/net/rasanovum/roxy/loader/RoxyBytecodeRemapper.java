@@ -662,7 +662,7 @@ public final class RoxyBytecodeRemapper {
                     @Override
                     public void visitFieldInsn(int opcode, String owner, String field, String desc) {
                         terrainShader = opcode == Opcodes.GETFIELD && owner.equals(VOXY_MDIC_SECTION_RENDERER)
-                                && (field.equals("terrainShader") || field.equals("translucentTerrainShader"));
+                                && field.equals("translucentTerrainShader");
                         super.visitFieldInsn(opcode, owner, field, desc);
                     }
 
@@ -678,7 +678,7 @@ public final class RoxyBytecodeRemapper {
                 };
             }
         }, 0);
-        if (matches[0] != 2) throw new IllegalStateException("Unsupported Voxy section renderer fog binding");
+        if (matches[0] != 1) throw new IllegalStateException("Unsupported Voxy section renderer fog binding");
         return writer.toByteArray();
     }
 

@@ -31,8 +31,10 @@ public final class RoxyTerrainFogShader {
         source = replaceOnce(source, "layout(location = 0) in flat uvec4 interData;", """
                 layout(location = 0) in flat uvec4 interData;
                 layout(location = 6) in vec3 roxyFogPoint;
+                #ifdef TRANSLUCENT
                 layout(location = 40) uniform vec4 roxyTerrainFogEnd;
-                layout(location = 41) uniform vec4 roxyTerrainFogColour;""");
+                layout(location = 41) uniform vec4 roxyTerrainFogColour;
+                #endif""");
         return replaceOnce(source, "    colour = computeColour(texPos, colour);\n    outColour = colour;", """
                     colour = computeColour(texPos, colour);
                     #ifdef TRANSLUCENT

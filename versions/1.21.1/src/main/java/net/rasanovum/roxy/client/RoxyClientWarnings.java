@@ -11,7 +11,6 @@ import net.rasanovum.roxy.loader.RoxyMacOSGraphics;
 import net.neoforged.fml.ModList;
 import net.neoforged.fml.loading.FMLPaths;
 import net.neoforged.neoforge.client.event.ScreenEvent;
-import org.lwjgl.opengl.GL11;
 
 import java.io.IOException;
 import java.io.Reader;
@@ -21,7 +20,6 @@ import java.nio.file.Path;
 import java.net.URISyntaxException;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Locale;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -79,37 +77,6 @@ public final class RoxyClientWarnings {
                             .append(Component.literal(" in config or in the Sodium video settings. Certain fog mods may allow you to re-enable this."))
             ));
         }
-        boolean amdGpu = amdGpuDetected();
-        if (amdGpu && !amdNoHyperZEnabled()) {
-            warnings.add(new Warning(
-                    "amd-hyperz",
-                    Component.literal("AMD GPU detected but no ").withStyle(ChatFormatting.WHITE)
-                            .append(Component.literal("AMD_DEBUG=nohyperz").withStyle(ChatFormatting.GOLD))
-                            .append(Component.literal(" environment variable found!").withStyle(ChatFormatting.WHITE)),
-                    Component.literal("AMD users, especially on older GPUs, will likely experience graphical issues with LOD rendering. Add the environment variable ")
-                            .append(Component.literal("AMD_DEBUG=nohyperz").withStyle(ChatFormatting.GOLD))
-                            .append(Component.literal(" to resolve many of these issues."))
-            ));
-        }
-        boolean createOrFlywheelPresent = ModList.get().isLoaded("create") || ModList.get().isLoaded("flywheel");
-        String backendId = amdGpu && createOrFlywheelPresent ? flywheelBackendId() : null;
-        if (shouldWarnAboutFlywheel(amdGpu, createOrFlywheelPresent, backendId)) {
-            boolean indirectBackend = isIndirectBackend(backendId);
-            warnings.add(new Warning(
-                    "amd-flywheel",
-                    indirectBackend
-                            ? Component.literal("AMD GPU").withStyle(ChatFormatting.GOLD)
-                                    .append(Component.literal(" detected with Flywheel's ").withStyle(ChatFormatting.WHITE))
-                                    .append(Component.literal("Indirect").withStyle(ChatFormatting.YELLOW))
-                                    .append(Component.literal(" backend!").withStyle(ChatFormatting.WHITE))
-                            : Component.literal("AMD GPU & Flywheel compatibility warning").withStyle(ChatFormatting.YELLOW),
-                    Component.literal("Users with AMD GPUs may encounter Flywheel rendering issues when using the ")
-                            .append(Component.literal("Indirect").withStyle(ChatFormatting.YELLOW))
-                            .append(Component.literal(" backend alongside Roxy. Use the "))
-                            .append(Component.literal("Instancing").withStyle(ChatFormatting.GOLD))
-                            .append(Component.literal(" backend instead to avoid these issues."))
-            ));
-        }
         return warnings;
     }
 
@@ -138,34 +105,6 @@ public final class RoxyClientWarnings {
         );
     }
 
-    static boolean shouldWarnAboutFlywheel(boolean amdGpu, boolean createOrFlywheelPresent, String backendId) {
-        if (!amdGpu || !createOrFlywheelPresent) return false;
-        return backendId == null || backendId.isBlank() || isIndirectBackend(backendId);
-    }
-
-    private static boolean isIndirectBackend(String backendId) {
-        if (backendId == null || backendId.isBlank()) return false;
-        String normalized = backendId.trim().toLowerCase(Locale.ROOT);
-        return normalized.equals("indirect") || normalized.endsWith(":indirect");
-    }
-
-    private static String flywheelBackendId() {
-        try {
-            Class<?> configClass = Class.forName("dev.engine_room.flywheel.impl.FlwConfig");
-            Object config = configClass.getField("INSTANCE").get(null);
-            Object backend = configClass.getMethod("backend").invoke(config);
-            if (backend == null) return null;
-
-            Class<?> backendClass = Class.forName("dev.engine_room.flywheel.api.backend.Backend");
-            Object registry = backendClass.getField("REGISTRY").get(null);
-            Class<?> registryClass = Class.forName("dev.engine_room.flywheel.api.registry.IdRegistry");
-            Object id = registryClass.getMethod("getId", Object.class).invoke(registry, backend);
-            return id == null ? null : id.toString();
-        } catch (ReflectiveOperationException | RuntimeException | LinkageError ignored) {
-            return null;
-        }
-    }
-
     private static boolean environmentalFogEnabled() {
         Path config = FMLPaths.CONFIGDIR.get().resolve("voxy-config.json");
         if (!Files.isRegularFile(config)) return false;
@@ -175,27 +114,6 @@ public final class RoxyClientWarnings {
         } catch (Exception ignored) {
             return false;
         }
-    }
-
-    private static boolean amdGpuDetected() {
-        try {
-            String vendor = GL11.glGetString(GL11.GL_VENDOR);
-            String renderer = GL11.glGetString(GL11.GL_RENDERER);
-            String vendorName = (vendor == null ? "" : vendor).toLowerCase(Locale.ROOT);
-            String rendererName = (renderer == null ? "" : renderer).toLowerCase(Locale.ROOT);
-            return vendorName.contains("advanced micro devices")
-                    || vendorName.startsWith("amd")
-                    || vendorName.startsWith("ati technologies")
-                    || rendererName.contains("radeon")
-                    || rendererName.startsWith("amd ");
-        } catch (RuntimeException | LinkageError ignored) {
-            return false;
-        }
-    }
-
-    private static boolean amdNoHyperZEnabled() {
-        String value = System.getenv("AMD_DEBUG");
-        return value != null && value.toLowerCase(Locale.ROOT).contains("nohyperz");
     }
 
     private static String currentVersion() {
